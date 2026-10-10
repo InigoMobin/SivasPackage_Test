@@ -52,15 +52,81 @@
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenu(false); });
     window.addEventListener('resize', () => { if (window.innerWidth > 1024) setMenu(false); });
   
-    /* ---------- Highlight current section in nav ---------- */
+    /* ---------- Aligned section scrolling ----------
+       Clicking a menu link (or any in-page #link) lands the section so that:
+         - its background starts right under the header (no strip of the
+           previous section shows), and
+         - its content sits a fixed, comfortable distance below the header,
+           the same on every section. */
+    const CONTENT_GAP = () => (window.innerWidth <= 680 ? 28 : 44); // px between header and content
+  
+    const targetY = (el) => {
+      if (el.id === 'top') return 0;
+      const headerH = header.offsetHeight;
+      const elTop = el.getBoundingClientRect().top + window.scrollY;
+      const padTop = parseFloat(getComputedStyle(el).paddingTop) || 0;
+      // skip the section's own top padding, keep CONTENT_GAP of breathing room,
+      // but never scroll past the content start or above the section's top edge
+      const skip = Math.max(0, padTop - CONTENT_GAP());
+      return Math.max(0, Math.round(elTop - headerH + skip));
+    };
+  
+    let scrollFixTimer;
+    const scrollToSection = (el, smooth = true) => {
+      const behavior = smooth && !prefersReduced ? 'smooth' : 'instant';
+      window.scrollTo({ top: targetY(el), behavior });
+      // after scrolling settles, correct any small drift (e.g. images loading)
+      clearTimeout(scrollFixTimer);
+      const fix = () => {
+        const y = targetY(el);
+        if (Math.abs(window.scrollY - y) > 2) window.scrollTo({ top: y, behavior: 'instant' });
+      };
+      if ('onscrollend' in window) {
+        window.addEventListener('scrollend', fix, { once: true });
+        scrollFixTimer = setTimeout(fix, 1500); // safety net
+      } else {
+        scrollFixTimer = setTimeout(fix, behavior === 'smooth' ? 900 : 50);
+      }
+    };
+  
+    $$('a[href^="#"]:not([data-goto-quote]):not(.skip-link)').forEach((a) => {
+      a.addEventListener('click', (e) => {
+        const id = a.getAttribute('href');
+        if (id.length < 2) return;
+        const el = document.querySelector(id);
+        if (!el) return;
+        e.preventDefault();
+        setMenu(false);
+        // wait one frame so the closing mobile menu doesn't affect measurements
+        requestAnimationFrame(() => scrollToSection(el));
+        history.replaceState(null, '', id === '#top' ? location.pathname : id);
+      });
+    });
+  
+    // Opening a link like yoursite.com/#faq lands aligned too
+    window.addEventListener('load', () => {
+      if (location.hash.length > 1) {
+        const el = document.querySelector(location.hash);
+        if (el) setTimeout(() => scrollToSection(el, false), 60);
+      }
+    });
+  
+    /* ---------- Highlight current section in nav ----------
+       The link for the section crossing the middle of the screen is underlined.
+       In the hero (or sections not in the menu) nothing is underlined. */
     const navLinks = $$('a', nav);
+    const navIds = navLinks.map((a) => a.getAttribute('href').slice(1));
+    const watched = $$('main > section');
+    const setCurrent = (id) => navLinks.forEach((a) => a.classList.toggle('is-current', a.getAttribute('href') === '#' + id));
     if ('IntersectionObserver' in window) {
       const io = new IntersectionObserver((entries) => {
         entries.forEach((en) => {
-          if (en.isIntersecting) navLinks.forEach((a) => a.classList.toggle('is-current', a.getAttribute('href') === '#' + en.target.id));
+          if (!en.isIntersecting) return;
+          const id = en.target.id;
+          setCurrent(navIds.includes(id) ? id : '');
         });
       }, { rootMargin: '-45% 0px -50% 0px' });
-      navLinks.forEach((a) => { const t = $(a.getAttribute('href')); if (t) io.observe(t); });
+      watched.forEach((sec) => io.observe(sec));
     }
   
     /* ---------- Reveal on scroll (replays when you scroll back down) ----------
@@ -169,7 +235,7 @@
       if (product) form.elements.product.value = product;
       // if a thank-you message is showing, bring the form back
       if (!$('#formSuccess').hidden) $('#sendAnother').click();
-      const top = form.getBoundingClientRect().top + window.scrollY - (header.offsetHeight + 24);
+      const top = form.getBoundingClientRect().top + window.scrollY - (header.offsetHeight + CONTENT_GAP());
       window.scrollTo({ top: Math.max(0, top), behavior: prefersReduced ? 'auto' : 'smooth' });
       setTimeout(() => {
         form.classList.remove('is-highlight');

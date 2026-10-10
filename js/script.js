@@ -63,17 +63,27 @@
       navLinks.forEach((a) => { const t = $(a.getAttribute('href')); if (t) io.observe(t); });
     }
   
-    /* ---------- Reveal on scroll ---------- */
+    /* ---------- Reveal on scroll (replays when you scroll back down) ----------
+       An element animates in when it enters the screen. When it leaves through
+       the BOTTOM of the screen (you scrolled back up past it), it resets, so it
+       animates again next time you scroll down. Content above you stays visible. */
     const reveals = $$('.reveal');
     if ('IntersectionObserver' in window && !prefersReduced) {
-      const io = new IntersectionObserver((entries, obs) => {
+      const io = new IntersectionObserver((entries) => {
         entries.forEach((en) => {
-          if (!en.isIntersecting) return;
-          const sibs = $$(':scope > .reveal', en.target.parentElement);
-          const i = Math.max(0, sibs.indexOf(en.target));
-          en.target.style.transitionDelay = Math.min(i * 80, 320) + 'ms';
-          en.target.classList.add('is-visible');
-          obs.unobserve(en.target);
+          const el = en.target;
+          if (en.isIntersecting) {
+            const sibs = $$(':scope > .reveal', el.parentElement);
+            const i = Math.max(0, sibs.indexOf(el));
+            el.style.transitionDelay = Math.min(i * 80, 320) + 'ms';
+            el.classList.remove('is-resetting');
+            el.classList.add('is-visible');
+          } else if (en.boundingClientRect.top > 0) {
+            // fully below the viewport: reset instantly, ready to replay
+            el.classList.add('is-resetting');
+            el.style.transitionDelay = '0ms';
+            el.classList.remove('is-visible');
+          }
         });
       }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
       reveals.forEach((el) => io.observe(el));
@@ -81,23 +91,34 @@
       reveals.forEach((el) => el.classList.add('is-visible'));
     }
   
-    /* ---------- Count-up numbers ---------- */
+    /* ---------- Count-up numbers (replay every time they come into view) ---------- */
     const countUp = (el) => {
       const target = parseInt(el.dataset.count, 10);
+      cancelAnimationFrame(el._raf);
       if (prefersReduced) { el.textContent = target; return; }
       const start = performance.now(), dur = 1600;
       const tick = (now) => {
         const p = Math.min((now - start) / dur, 1);
         el.textContent = Math.round(target * (1 - Math.pow(1 - p, 3)));
-        if (p < 1) requestAnimationFrame(tick);
+        if (p < 1) el._raf = requestAnimationFrame(tick);
       };
-      requestAnimationFrame(tick);
+      el._raf = requestAnimationFrame(tick);
     };
     const counters = $$('[data-count]');
     if ('IntersectionObserver' in window) {
-      const io = new IntersectionObserver((entries, obs) => {
-        entries.forEach((en) => { if (en.isIntersecting) { countUp(en.target); obs.unobserve(en.target); } });
-      }, { threshold: 0.6 });
+      const io = new IntersectionObserver((entries) => {
+        entries.forEach((en) => {
+          const el = en.target;
+          if (en.isIntersecting) {
+            if (!el._counted) { el._counted = true; countUp(el); }
+          } else {
+            // off screen: reset so it counts up again next time
+            el._counted = false;
+            cancelAnimationFrame(el._raf);
+            el.textContent = '0';
+          }
+        });
+      }, { threshold: 0.5 });
       counters.forEach((c) => io.observe(c));
     } else {
       counters.forEach((c) => (c.textContent = c.dataset.count));
@@ -146,13 +167,16 @@
     const form = $('#quote');
     const goToQuote = (product) => {
       if (product) form.elements.product.value = product;
-      form.scrollIntoView({ behavior: prefersReduced ? 'auto' : 'smooth', block: 'center' });
+      // if a thank-you message is showing, bring the form back
+      if (!$('#formSuccess').hidden) $('#sendAnother').click();
+      const top = form.getBoundingClientRect().top + window.scrollY - (header.offsetHeight + 24);
+      window.scrollTo({ top: Math.max(0, top), behavior: prefersReduced ? 'auto' : 'smooth' });
       setTimeout(() => {
         form.classList.remove('is-highlight');
-        void form.offsetWidth;
+        void form.offsetWidth; // restart the highlight animation
         form.classList.add('is-highlight');
         form.elements.name.focus({ preventScroll: true });
-      }, prefersReduced ? 0 : 600);
+      }, prefersReduced ? 0 : 650);
     };
     $$('[data-goto-quote]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); setMenu(false); goToQuote(); }));
     $$('[data-product]').forEach((b) => b.addEventListener('click', () => goToQuote(b.dataset.product)));
